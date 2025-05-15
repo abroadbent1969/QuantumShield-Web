@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuantumShield Web</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .tab-container {
+            display: flex;
+            border-bottom: 1px solid #ccc;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .tab.active {
+            border-bottom: 2px solid #007bff;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .drop-zone {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .drop-zone.dragover {
+            background-color: #e0e0e0;
+        }
+        .file-list {
+            margin-bottom: 20px;
+        }
+        .file-item {
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        button, input[type="text"], input[type="password"], input[type="file"] {
+            margin: 5px;
+            padding: 8px;
+        }
+        .key-management {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>QuantumShield Web</h1>
+    <div class="tab-container">
+        <div class="tab active" onclick="switchTab('encrypt')">Encrypt</div>
+        <div class="tab" onclick="switchTab('decrypt')">Decrypt</div>
+    </div>
+    <div id="encrypt" class="tab-content active">
+        <h2>Encrypt Files</h2>
+        <div class="drop-zone" id="encryptDropZone">
+            Drag and drop files here or click to select
+        </div>
+        <input type="file" id="encryptFileInput" multiple style="display: none;">
+        <div class="file-list" id="encryptFileList"></div>
+        <input type="checkbox" id="encryptPasswordCheck" onclick="togglePassword('encrypt')">
+        <label for="encryptPasswordCheck">Password Protected</label>
+        <div id="encryptPasswordSection" style="display: none;">
+            <input type="password" id="encryptPassword" placeholder="Enter password">
+            <button onclick="toggleShowPassword('encryptPassword')">Show</button>
+        </div>
+        <button onclick="encryptFiles()">Encrypt Files</button>
+    </div>
+    <div id="decrypt" class="tab-content">
+        <h2>Decrypt Files</h2>
+        <div class="drop-zone" id="decryptDropZone">
+            Drag and drop .enc files here or click to select
+        </div>
+        <input type="file" id="decryptFileInput" multiple style="display: none;">
+        <div class="file-list" id="decryptFileList"></div>
+        <input type="checkbox" id="decryptPasswordCheck" onclick="togglePassword('decrypt')">
+        <label for="decryptPasswordCheck">Password Protected</label>
+        <div id="decryptPasswordSection" style="display: none;">
+            <input type="password" id="decryptPassword" placeholder="Enter password">
+            <button onclick="toggleShowPassword('decryptPassword')">Show</button>
+        </div>
+        <div id="keyPartSection">
+            <label for="keyPartInput">Upload Second Key Part (.keypart):</label>
+            <input type="file" id="keyPartInput" accept=".keypart">
+        </div>
+        <button onclick="decryptFiles()">Decrypt Files</button>
+    </div>
+    <div class="key-management">
+        <h2>Key Management</h2>
+        <button onclick="generateKey()">Generate New Key</button>
+        <button onclick="exportPublicKey()">Export Public Key</button>
+        <button onclick="importKey()">Import Key</button>
+        <button onclick="rotateKey()">Rotate Key</button>
+        <div id="keyStatus"></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script>
+        let currentKeyId = null;
+        let keys = JSON.parse(localStorage.getItem('quantumShieldKeys')) || {};
+        let encryptFilesList = [];
+        let decryptFilesList = [];
+        let secondKeyPart = null;
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            document.querySelector(`.tab[onclick="switchTab('${tabId}')"]`).classList.add('active');
+        }
+
+        function setupDropZone(dropZoneId, fileInputId, fileListId, isEncrypt) {
+            const dropZone = document.getElementById(dropZoneId);
+            const fileInput = document.getElementById(fileInputId);
+            const fileList = document.getElementById(fileListId);
+
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (isEncrypt) {
+                    encryptFilesList = Array.from(files);
+                } else {
+                    decryptFilesList = Array.from(files);
+                }
+                handleFiles(files, fileList);
+            });
+            fileInput.addEventListener('change', () => {
+                const files = fileInput.files;
+                if (isEncrypt) {
+                    encryptFilesList = Array.from(files);
+                } else {
+                    decryptFilesList = Array.from(files);
+                }
+                handleFiles(files, fileList);
+                fileInput.value = '';
+            });
+        }
+
+        function handleFiles(files, fileList) {
+            fileList.innerHTML = '';
+            for (let file of files) {
+                const div = document.createElement('div');
+                div.className = 'file-item';
+                div.textContent = file.name;
+                fileList.appendChild(div);
+            }
+        }
+
+        function togglePassword(section) {
+            const check = document.getElementById(`${section}PasswordCheck`);
+            const sectionDiv = document.getElementById(`${section}PasswordSection`);
+            sectionDiv.style.display = check.checked ? 'block' : 'none';
+            document.getElementById(`${section}Password`).value = '';
+        }
+
+        function toggleShowPassword(inputId) {
+            const input = document.getElementById(inputId);
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }
+
+        // Split a key into two parts using XOR
+        function splitKey(key) {
+            const part1 = CryptoJS.lib.WordArray.random(32).toString();
+            const part2 = xorStrings(key, part1);
+            return { part1, part2 };
+        }
+
+        // Reconstruct key from two parts using XOR
+        function reconstructKey(part1, part2) {
+            return xorStrings(part1, part2);
+        }
+
+        // XOR two strings (for key splitting)
+        function xorStrings(str1, str2) {
+            const result = [];
+            for (let i = 0; i < Math.min(str1.length, str2.length); i++) {
+                result.push(String.fromCharCode(str1.charCodeAt(i) ^ str2.charCodeAt(i)));
+            }
+            return result.join('');
+        }
+
+        async function encryptFiles() {
+            if (!currentKeyId) {
+                alert('Please generate a key first.');
+                return;
+            }
+            const password = document.getElementById('encryptPassword').value;
+            const usePassword = document.getElementById('encryptPasswordCheck').checked;
+
+            if (!encryptFilesList.length) {
+                alert('Please select files to encrypt.');
+                return;
+            }
+            if (usePassword && !password) {
+                alert('Please enter a password.');
+                return;
+            }
+
+            for (let file of encryptFilesList) {
+                const reader = new FileReader();
+                reader.onload = async () => {
+                    try {
+                        const arrayBuffer = reader.result;
+                        const base64Data = arrayBufferToBase64(arrayBuffer);
+
+                        let encrypted;
+                        if (usePassword) {
+                            // Double encryption with password
+                            const firstLayer = CryptoJS.AES.encrypt(base64Data, password, {
+                                iv: CryptoJS.lib.WordArray.random(16)
+                            }).toString();
+                            encrypted = CryptoJS.AES.encrypt(firstLayer, password, {
+                                iv: CryptoJS.lib.WordArray.random(16)
+                            }).toString();
+                        } else {
+                            // Double encryption with key parts
+                            const key = keys[currentKeyId].privateKey;
+                            const firstLayer = CryptoJS.AES.encrypt(base64Data, key, {
+                                iv: CryptoJS.lib.WordArray.random(16)
+                            }).toString();
+                            encrypted = CryptoJS.AES.encrypt(firstLayer, key, {
+                                iv: CryptoJS.lib.WordArray.random(16)
+                            }).toString();
+                        }
+
+                        const metadata = {
+                            keyId: currentKeyId,
+                            passwordProtected: usePassword,
+                            originalName: file.name
+                        };
+
+                        const encryptedData = JSON.stringify({ metadata, data: encrypted });
+                        const blob = new Blob([encryptedData], { type: 'application/octet-stream' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = file.name + '.enc';
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    } catch (e) {
+                        console.error(`Encryption error for ${file.name}:`, e);
+                        alert(`Failed to encrypt ${file.name}: ${e.message}`);
+                    }
+                };
+                reader.onerror = () => {
+                    console.error(`Error reading file ${file.name}`);
+                    alert(`Error reading file ${file.name}`);
+                };
+                reader.readAsArrayBuffer(file);
+            }
+            alert('Encryption complete!');
+            encryptFilesList = [];
+            document.getElementById('encryptFileList').innerHTML = '';
+        }
+
+        async function decryptFiles() {
+            const password = document.getElementById('decryptPassword').value;
+            const usePassword = document.getElementById('decryptPasswordCheck').checked;
+            const keyPartInput = document.getElementById('keyPartInput');
+
+            if (!decryptFilesList.length) {
+                alert('Please select .enc files to decrypt.');
+                return;
+            }
+            if (usePassword && !password) {
+                alert('Please enter a password.');
+                return;
+            }
+            if (!usePassword && !keyPartInput.files.length) {
+                alert('Please upload the second key part (.keypart).');
+                return;
+            }
+
+            // Read second key part if provided
+            if (keyPartInput.files.length) {
+                const file = keyPartInput.files[0];
+                const reader = new FileReader();
+                reader.onload = () => {
+                    secondKeyPart = reader.result;
+                    processDecryption(password, usePassword);
+                };
+                reader.onerror = () => {
+                    alert('Error reading key part file.');
+                };
+                reader.readAsText(file);
+            } else {
+                processDecryption(password, usePassword);
+            }
+        }
+
+        async function processDecryption(password, usePassword) {
+            for (let file of decryptFilesList) {
+                if (!file.name.endsWith('.enc')) {
+                    console.warn(`Skipping non-.enc file: ${file.name}`);
+                    continue;
+                }
+                const reader = new FileReader();
+                reader.onload = async () => {
+                    try {
+                        let parsedData;
+                        try {
+                            parsedData = JSON.parse(reader.result);
+                        } catch (e) {
+                            throw new Error('Invalid .enc file format');
+                        }
+
+                        const { metadata, data } = parsedData;
+                        if (!metadata || !metadata.keyId || !data) {
+                            throw new Error('Missing metadata or data in .enc file');
+                        }
+
+                        let decrypted;
+                        if (usePassword) {
+                            // Double decryption with password
+                            try {
+                                const secondLayer = CryptoJS.AES.decrypt(data, password);
+                                const firstLayer = secondLayer.toString(CryptoJS.enc.Utf8);
+                                if (!firstLayer) throw new Error('Second layer decryption failed');
+                                decrypted = CryptoJS.AES.decrypt(firstLayer, password);
+                                decrypted = decrypted.toString(CryptoJS.enc.Utf8);
+                                if (!decrypted) throw new Error('First layer decryption failed');
+                            } catch (e) {
+                                throw new Error(`Decryption failed: ${e.message}`);
+                            }
+                        } else {
+                            // Reconstruct key from two parts
+                            if (!keys[metadata.keyId] || !secondKeyPart) {
+                                throw new Error('Missing key or second key part');
+                            }
+                            const keyPart1 = keys[metadata.keyId].privateKeyPart1;
+                            const reconstructedKey = reconstructKey(keyPart1, secondKeyPart);
+                            if (reconstructedKey !== keys[metadata.keyId].privateKey) {
+                                throw new Error('Invalid second key part');
+                            }
+
+                            // Double decryption with reconstructed key
+                            try {
+                                const secondLayer = CryptoJS.AES.decrypt(data, reconstructedKey);
+                                const firstLayer = secondLayer.toString(CryptoJS.enc.Utf8);
+                                if (!firstLayer) throw new Error('Second layer decryption failed');
+                                decrypted = CryptoJS.AES.decrypt(firstLayer, reconstructedKey);
+                                decrypted = decrypted.toString(CryptoJS.enc.Utf8);
+                                if (!decrypted) throw new Error('First layer decryption failed');
+                            } catch (e) {
+                                throw new Error(`Decryption failed: ${e.message}`);
+                            }
+                        }
+
+                        let binaryData;
+                        try {
+                            binaryData = base64ToArrayBuffer(decrypted);
+                        } catch (e) {
+                            throw new Error(`Failed to convert decrypted data: ${e.message}`);
+                        }
+
+                        const blob = new Blob([binaryData], { type: 'application/octet-stream' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = metadata.originalName || file.name.replace('.enc', '');
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        console.log(`Successfully decrypted and downloaded: ${file.name}`);
+                    } catch (e) {
+                        console.error(`Decryption error for ${file.name}:`, e);
+                        alert(`Failed to decrypt ${file.name}: ${e.message}`);
+                    }
+                };
+                reader.onerror = () => {
+                    console.error(`Error reading file ${file.name}`);
+                    alert(`Error reading file ${file.name}`);
+                };
+                reader.readAsText(file);
+            }
+            alert('Decryption process completed!');
+            decryptFilesList = [];
+            document.getElementById('decryptFileList').innerHTML = '';
+            document.getElementById('keyPartInput').value = '';
+            secondKeyPart = null;
+        }
+
+        function arrayBufferToBase64(buffer) {
+            let binary = '';
+            const bytes = new Uint8Array(buffer);
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binary = atob(base64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function generateKey() {
+            const keyId = Date.now().toString();
+            const privateKey = CryptoJS.lib.WordArray.random(32).toString();
+            const publicKey = CryptoJS.lib.WordArray.random(32).toString();
+            const { part1, part2 } = splitKey(privateKey);
+
+            keys[keyId] = {
+                privateKey, // Store full key for verification
+                privateKeyPart1: part1, // Store first part
+                publicKey
+            };
+            currentKeyId = keyId;
+            localStorage.setItem('quantumShieldKeys', JSON.stringify(keys));
+            document.getElementById('keyStatus').textContent = `New key generated (ID: ${keyId})`;
+
+            // Download second key part
+            const blob = new Blob([part2], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `quantumshield_keypart2_${keyId}.keypart`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            promptBackup(keyId);
+        }
+
+        function promptBackup(keyId) {
+            const passphrase = prompt('Enter a passphrase for key backup:');
+            if (!passphrase) {
+                alert('Passphrase cannot be empty.');
+                return;
+            }
+            const backupData = JSON.stringify({ keyId, key: keys[keyId], passphrase });
+            const blob = new Blob([backupData], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `quantumshield_backup_${keyId}.key`;
+            a.click();
+            URL.revokeObjectURL(url);
+            alert('Key backed up successfully! Second key part downloaded separately.');
+        }
+
+        function exportPublicKey() {
+            if (!currentKeyId) {
+                alert('No key selected.');
+                return;
+            }
+            const blob = new Blob([keys[currentKeyId].publicKey], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `quantumshield_public_${currentKeyId}.key`;
+            a.click();
+            URL.revokeObjectURL(url);
+            alert('Public key exported!');
+        }
+
+        function importKey() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.key';
+            input.onchange = () => {
+                const file = input.files[0];
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const passphrase = prompt('Enter the passphrase for the key backup:');
+                    if (!passphrase) {
+                        alert('Passphrase cannot be empty.');
+                        return;
+                    }
+                    try {
+                        const { keyId, key, passphrase: storedPassphrase } = JSON.parse(reader.result);
+                        if (passphrase !== storedPassphrase) {
+                            alert('Invalid passphrase.');
+                            return;
+                        }
+                        keys[keyId] = key;
+                        currentKeyId = keyId;
+                        localStorage.setItem('quantumShieldKeys', JSON.stringify(keys));
+                        document.getElementById('keyStatus').textContent = `Key imported (ID: ${keyId})`;
+                        alert('Key imported successfully! You will need the second key part for decryption.');
+                    } catch (e) {
+                        alert('Failed to import key: ' + e.message);
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        }
+
+        function rotateKey() {
+            if (!currentKeyId) {
+                alert('No key to rotate.');
+                return;
+            }
+            const oldKeyId = currentKeyId;
+            generateKey();
+            document.getElementById('keyStatus').textContent += `; Old key (ID: ${oldKeyId}) archived.`;
+            alert('Key rotated successfully!');
+        }
+
+        // Initialize drop zones
+        setupDropZone('encryptDropZone', 'encryptFileInput', 'encryptFileList', true);
+        setupDropZone('decryptDropZone', 'decryptFileInput', 'decryptFileList', false);
+
+        // Load current key status
+        if (Object.keys(keys).length) {
+            currentKeyId = Object.keys(keys)[Object.keys(keys).length - 1];
+            document.getElementById('keyStatus').textContent = `Current key ID: ${currentKeyId}`;
+        }
+    </script>
+</body>
+</html>
